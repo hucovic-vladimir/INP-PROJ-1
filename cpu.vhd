@@ -67,14 +67,16 @@ signal PTR_dec : std_logic;
 signal mx1_sel : std_logic;
 signal mx2_sel : std_logic_vector(1 downto 0);
 
+--- FSM states
 
+type FSMstate is(s_reset, s_fetch, s_decode, s_ptr_inc, s_ptr_dec, s_value_inc1, s_value_inc2, s_value_inc3, s_value_inc4, s_value_dec1, s_value_dec2, s_value_dec3, s_value_dec4, s_print, s_load, s_null);
+signal pstate : FSMstate;
+signal nstate : FSMstate;
 
 begin
 
 
-
-
-reg_PC: process (RESET, CLK)
+reg_PC: process (RESET, CLK, PC_inc, PC_dec)
 begin
 	if(RESET = '1') then
 		PC <= (others => '0');
@@ -89,7 +91,7 @@ end process;
 
 
 
-reg_CNT: process (RESET, CLK)
+reg_CNT: process (RESET, CLK, CNT_inc, CNT_dec)
 begin
 	if(RESET = '1') then
 		CNT <= (others => '0');
@@ -103,15 +105,15 @@ begin
 end process;
 
 
-reg_PTR: process (RESET, CLK)
+reg_PTR: process (RESET, CLK, PTR_inc, PTR_dec)
 begin
 	if(RESET = '1') then
-		PTR <= (others => '0');
+		PTR <= conv_std_logic_vector(4096, 13);
 	elsif (CLK'event) and (CLK = '1') then
 		if(PTR_inc='1') then
-			PTR <= PTR + 1;
-		elsif(PTR_dec='1') then
-			PTR <= PTR - 1;
+			PTR <= conv_std_logic_vector(4096 + (conv_integer(unsigned(PTR))+1) mod 4096, 13);
+		elsif(PTR_dec='1') then 
+			PTR <= conv_std_logic_vector(4096 + (conv_integer(unsigned(PTR))-1) mod 4096, 13);
 		end if;
 	end if;
 end process;
@@ -142,12 +144,143 @@ begin
 			when others => DATA_WDATA <= (others => '0');
 		end case;
 	end if;
-
-	--DATA_ADDR <= PC when (mx1_sel = '0')
-	--				else CNT;
 end process;
-DATA_WDATA <= IN_DATA when (mx2_sel = "00") else
-			(DATA_RDATA - 1) when (mx2_sel = "01") else
-			(DATA_RDATA + 1) when (mx2_sel = "10") else
-			(others => '0');
+
+psreg: process (RESET, CLK, EN)
+begin
+	if(RESET='1') then
+		pstate <= s_reset;
+	elsif(CLK'event and CLK='1' and EN='1') then
+		pstate <= nstate;
+	end if;
+end process;
+
+
+
+nslogic: process(pstate, IN_VLD, OUT_BUSY, DATA_RDATA, CNT, EN)
+begin
+	IN_REQ <= '0';
+	OUT_DATA <= (others => '0');
+	OUT_WE <= '0';
+	mx1_sel <= '0';
+	mx2_sel <= (others => '0');
+	DATA_RDWR <= '0';
+	DATA_EN <= '0';
+	PC_inc <= '0';
+	PC_dec <= '0';
+	PTR_inc <= '0';
+	PTR_dec <= '0';
+	CNT_inc <= '0';
+	CNT_dec <= '0';
+
+	case pstate is
+		when s_null =>
+			nstate <= s_null;
+		when s_reset =>
+			nstate <= s_fetch;
+		when s_fetch =>
+			mx1_sel <= '0';
+			DATA_EN <= '1';
+			nstate <= s_decode;
+		when s_decode =>
+			case DATA_RDATA is
+				when X"00" =>
+					nstate <= s_null;
+				when X"3E" =>
+					nstate <= s_ptr_inc;
+				when X"3C" =>
+					nstate <= s_ptr_dec;
+				when X"2B" =>
+					nstate <= s_value_inc1;
+				when X"2D" =>
+					nstate <= s_value_dec1;
+				when X"2E" =>
+					nstate <= s_print;
+				when X"2C" =>
+					nstate <= s_load;
+				when others =>
+					nstate <= s_null;
+			end case;
+		when s_ptr_inc =>
+				PTR_inc <= '1';
+				PC_inc <= '1';
+				nstate <= s_fetch;
+
+		when s_ptr_dec =>
+				PTR_dec <= '1';
+				PC_inc <= '1';
+				nstate <= s_fetch;		
+
+		-- send content of PTR to DATA_ADDR (DATA_ADDR = ptr)
+		when s_value_inc1 =>
+				mx1_sel <= '1';
+				nstate <= s_value_inc2;
+		
+		-- Read from DATA_ADDR (DATA_RDATA = *ptr) 		
+		when s_value_inc2 =>
+				DATA_EN <= '1';
+				DATA_RDWR <= '0';
+				mx1_sel <= '1';
+				nstate <= s_value_inc3;
+
+		-- Increment the value of ptr  (*ptr)++ 
+		when s_value_inc3 =>
+				mx2_sel <= "10";
+				mx1_sel <= '1';
+
+		-- We can also increment PC here
+				PC_inc <= '1';
+				nstate <= s_value_inc4;
+
+		-- Send the incremented value to DATA_WDATA (DATA_WDATA = *ptr)		
+		when s_value_inc4 =>
+				DATA_RDWR <= '1';
+				DATA_EN <= '1';	
+				mx2_sel <= "10";
+				nstate <= s_fetch;
+
+		-- send content of PTR to DATA_ADDR (DATA_ADDR = ptr)
+		when s_value_dec1 =>
+				mx1_sel <= '1';
+				nstate <= s_value_dec2;
+
+		-- Read from DATA_ADDR (DATA_RDATA = *ptr) 		
+		when s_value_dec2 =>
+				DATA_EN <= '1';
+				DATA_RDWR <= '0';
+				mx1_sel <= '1';
+				nstate <= s_value_dec3;
+
+		-- Decrement the value of ptr  (*ptr)-- 
+		when s_value_dec3 =>
+				mx2_sel <= "01";
+				mx1_sel <= '1';
+
+		-- We can increment PC here		
+				PC_inc <= '1';
+				nstate <= s_value_dec4;
+
+		-- Send the decremented value to DATA_WDATA (DATA_WDATA = *ptr)		
+		when s_value_dec4 =>
+				DATA_RDWR <= '1';
+				DATA_EN <= '1';	
+				mx2_sel <= "01";
+				nstate <= s_fetch;		
+		when others => null;		
+				
+	end case;		
+end process;
+
+
+--with mx1_sel select
+--	DATA_ADDR <= PC when '0',
+--			PTR when '1',
+--			(others => '0') when others;
+
+--with mx2_sel select
+--	DATA_WDATA <= IN_DATA when "00",
+--			(DATA_RDATA - 1) when "01",
+--			(DATA_RDATA + 1) when "10",
+--			(others => '0') when others;
+
 end behavioral;
