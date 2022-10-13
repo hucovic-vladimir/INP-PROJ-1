@@ -1,7 +1,7 @@
 -- cpu.vhd: Simple 8-bit CPU (BrainFuck interpreter)
 -- Copyright (C) 2022 Brno University of Technology,
 --                    Faculty of Information Technology
--- Author(s): Vladimír Hucovič <xhucov00@stud.fit.vutbr.cz>
+-- Author(s): Vladimir Hucovic <xhucov00@stud.fit.vutbr.cz>
 --
 library ieee;
 use ieee.std_logic_1164.all;
@@ -75,7 +75,6 @@ signal nstate : FSMstate;
 
 begin
 
-
 reg_PC: process (RESET, CLK, PC_inc, PC_dec)
 begin
 	if(RESET = '1') then
@@ -88,7 +87,6 @@ begin
 		end if;
 	end if;
 end process;
-
 
 
 reg_CNT: process (RESET, CLK, CNT_inc, CNT_dec)
@@ -118,33 +116,18 @@ begin
 	end if;
 end process;
 
+--MUX that sends either PTR or PC to DATA_ADDR
+with mx1_sel select
+	DATA_ADDR <= PC when '0',
+			PTR when '1',
+			(others => '0') when others;
 
-mx1: process(CLK, RESET, mx1_sel)
-begin
-	if(RESET = '1') then 
-		DATA_ADDR <= (others => '0');
-	elsif (CLK'event and CLK='1') then
-		case mx1_sel is
-			when '0' => DATA_ADDR <= PC;
-			when '1' => DATA_ADDR <= PTR;
-			when others => DATA_ADDR <= (others => '0');
-		end case;
-	end if;			
-end process;
-
-mx2: process(CLK, RESET, mx2_sel)
-begin
-	if(RESET = '1') then
-		DATA_WDATA <= (others => '0');
-	elsif (CLK'event and CLK='1') then
-		case mx2_sel is
-			when "00" => DATA_WDATA <= IN_DATA;
-			when "01" => DATA_WDATA <= (DATA_RDATA - 1);
-			when "10" => DATA_WDATA <= (DATA_RDATA + 1);
-			when others => DATA_WDATA <= (others => '0');
-		end case;
-	end if;
-end process;
+-- MUX that sends either keyboard input, RDATA+1 or RDATA-1 to DATA_WDATA
+with mx2_sel select
+	DATA_WDATA <= IN_DATA when "00",
+			(DATA_RDATA - 1) when "01",
+			(DATA_RDATA + 1) when "10",
+			(others => '0') when others;
 
 psreg: process (RESET, CLK, EN)
 begin
@@ -154,8 +137,6 @@ begin
 		pstate <= nstate;
 	end if;
 end process;
-
-
 
 nslogic: process(pstate, IN_VLD, OUT_BUSY, DATA_RDATA, CNT, EN)
 begin
@@ -211,76 +192,46 @@ begin
 				PC_inc <= '1';
 				nstate <= s_fetch;		
 
-		-- send content of PTR to DATA_ADDR (DATA_ADDR = ptr)
+		-- send content of PTR to DATA_ADDR and read the value from DATA_RDATA
 		when s_value_inc1 =>
 				mx1_sel <= '1';
-				nstate <= s_value_inc2;
-		
-		-- Read from DATA_ADDR (DATA_RDATA = *ptr) 		
-		when s_value_inc2 =>
 				DATA_EN <= '1';
 				DATA_RDWR <= '0';
-				mx1_sel <= '1';
-				nstate <= s_value_inc3;
+				nstate <= s_value_inc2;
+	
 
-		-- Increment the value of ptr  (*ptr)++ 
-		when s_value_inc3 =>
+		-- Increment the value read by 1 and write to DATA_WDATA, increment PC and 
+		-- fetch next instruction
+		when s_value_inc2 =>
 				mx2_sel <= "10";
 				mx1_sel <= '1';
-
-		-- We can also increment PC here
-				PC_inc <= '1';
-				nstate <= s_value_inc4;
-
-		-- Send the incremented value to DATA_WDATA (DATA_WDATA = *ptr)		
-		when s_value_inc4 =>
 				DATA_RDWR <= '1';
 				DATA_EN <= '1';	
-				mx2_sel <= "10";
+
+				PC_inc <= '1';
 				nstate <= s_fetch;
 
-		-- send content of PTR to DATA_ADDR (DATA_ADDR = ptr)
+			-- send content of PTR to DATA_ADDR and read the value from DATA_RDATA
 		when s_value_dec1 =>
 				mx1_sel <= '1';
-				nstate <= s_value_dec2;
-
-		-- Read from DATA_ADDR (DATA_RDATA = *ptr) 		
-		when s_value_dec2 =>
 				DATA_EN <= '1';
 				DATA_RDWR <= '0';
-				mx1_sel <= '1';
-				nstate <= s_value_dec3;
+				nstate <= s_value_dec2;
+	
 
-		-- Decrement the value of ptr  (*ptr)-- 
-		when s_value_dec3 =>
+		-- Increment the value read by 1 and write to DATA_WDATA, increment PC and 
+		-- fetch next instruction
+		when s_value_dec2 =>
 				mx2_sel <= "01";
 				mx1_sel <= '1';
-
-		-- We can increment PC here		
-				PC_inc <= '1';
-				nstate <= s_value_dec4;
-
-		-- Send the decremented value to DATA_WDATA (DATA_WDATA = *ptr)		
-		when s_value_dec4 =>
 				DATA_RDWR <= '1';
 				DATA_EN <= '1';	
-				mx2_sel <= "01";
-				nstate <= s_fetch;		
+
+				PC_inc <= '1';
+				nstate <= s_fetch;	
 		when others => null;		
 				
 	end case;		
 end process;
-
-
---with mx1_sel select
---	DATA_ADDR <= PC when '0',
---			PTR when '1',
---			(others => '0') when others;
-
---with mx2_sel select
---	DATA_WDATA <= IN_DATA when "00",
---			(DATA_RDATA - 1) when "01",
---			(DATA_RDATA + 1) when "10",
---			(others => '0') when others;
 
 end behavioral;
