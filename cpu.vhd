@@ -69,12 +69,25 @@ signal mx2_sel : std_logic_vector(1 downto 0);
 
 --- FSM states
 
-type FSMstate is(s_reset, s_fetch, s_decode, s_ptr_inc, s_ptr_dec, s_value_inc1, s_value_inc2, s_value_inc3, s_value_inc4, s_value_dec1, s_value_dec2, s_value_dec3, s_value_dec4, s_print, s_load, s_null);
+type FSMstate is(s_reset,
+				s_fetch, 
+				s_decode,
+				s_ptr_inc,
+				s_ptr_dec,
+    			s_value_inc1, s_value_inc2,
+				s_value_dec1, s_value_dec2,
+				s_print1, s_print2,
+				s_load1, s_load2,
+				s_while1, s_while2, s_while3,
+				s_while_end1, s_while_end2, s_while_end3, s_while_end4, s_while_end5,
+				s_do_while, s_do_while_end1, s_do_while_end2, s_do_while_end3, s_do_while_end4, s_do_while_end5,
+				 s_null);
 signal pstate : FSMstate;
 signal nstate : FSMstate;
 
 begin
 
+-- Program counter
 reg_PC: process (RESET, CLK, PC_inc, PC_dec)
 begin
 	if(RESET = '1') then
@@ -88,7 +101,7 @@ begin
 	end if;
 end process;
 
-
+-- CNT register
 reg_CNT: process (RESET, CLK, CNT_inc, CNT_dec)
 begin
 	if(RESET = '1') then
@@ -102,7 +115,7 @@ begin
 	end if;
 end process;
 
-
+-- PTR register
 reg_PTR: process (RESET, CLK, PTR_inc, PTR_dec)
 begin
 	if(RESET = '1') then
@@ -138,6 +151,7 @@ begin
 	end if;
 end process;
 
+-- FSM Next state logic, output logic
 nslogic: process(pstate, IN_VLD, OUT_BUSY, DATA_RDATA, CNT, EN)
 begin
 	IN_REQ <= '0';
@@ -176,60 +190,251 @@ begin
 				when X"2D" =>
 					nstate <= s_value_dec1;
 				when X"2E" =>
-					nstate <= s_print;
+					nstate <= s_print1;
 				when X"2C" =>
-					nstate <= s_load;
-				when others =>
+					nstate <= s_load1;
+				when X"5B" =>
+					nstate <= s_while1;
+				when X"5D" =>
+					nstate <= s_while_end1;
+				when X"28" =>
+					nstate <= s_do_while;
+				when X"29" =>
+					nstate <= s_do_while_end1;
+				when X"0" =>
 					nstate <= s_null;
+				when others =>
+					PC_inc <= '1';
+					nstate <= s_fetch;
 			end case;
 		when s_ptr_inc =>
-				PTR_inc <= '1';
-				PC_inc <= '1';
-				nstate <= s_fetch;
+			PTR_inc <= '1';
+			PC_inc <= '1';
+			nstate <= s_fetch;
 
 		when s_ptr_dec =>
-				PTR_dec <= '1';
-				PC_inc <= '1';
-				nstate <= s_fetch;		
+			PTR_dec <= '1';
+			PC_inc <= '1';
+			nstate <= s_fetch;		
 
 		-- send content of PTR to DATA_ADDR and read the value from DATA_RDATA
 		when s_value_inc1 =>
-				mx1_sel <= '1';
-				DATA_EN <= '1';
-				DATA_RDWR <= '0';
-				nstate <= s_value_inc2;
+			mx1_sel <= '1';
+			DATA_EN <= '1';
+			DATA_RDWR <= '0';
+			nstate <= s_value_inc2;
 	
 
 		-- Increment the value read by 1 and write to DATA_WDATA, increment PC and 
 		-- fetch next instruction
 		when s_value_inc2 =>
-				mx2_sel <= "10";
-				mx1_sel <= '1';
-				DATA_RDWR <= '1';
-				DATA_EN <= '1';	
+			mx2_sel <= "10";
+			mx1_sel <= '1';
+			DATA_RDWR <= '1';
+			DATA_EN <= '1';	
 
-				PC_inc <= '1';
-				nstate <= s_fetch;
+			PC_inc <= '1';
+			nstate <= s_fetch;
 
 			-- send content of PTR to DATA_ADDR and read the value from DATA_RDATA
 		when s_value_dec1 =>
-				mx1_sel <= '1';
-				DATA_EN <= '1';
-				DATA_RDWR <= '0';
-				nstate <= s_value_dec2;
+			mx1_sel <= '1';
+			DATA_EN <= '1';
+			DATA_RDWR <= '0';
+			nstate <= s_value_dec2;
 	
 
 		-- Increment the value read by 1 and write to DATA_WDATA, increment PC and 
 		-- fetch next instruction
 		when s_value_dec2 =>
-				mx2_sel <= "01";
+			mx2_sel <= "01";
+			mx1_sel <= '1';
+			DATA_RDWR <= '1';
+			DATA_EN <= '1';	
+
+			PC_inc <= '1';
+			nstate <= s_fetch;	
+
+
+		when s_load1 =>
+			IN_REQ <= '1';
+			nstate <= s_load2;
+		when s_load2 =>
+			if(IN_VLD = '1') then
+				mx2_sel <= "00";
 				mx1_sel <= '1';
 				DATA_RDWR <= '1';
-				DATA_EN <= '1';	
-
+				DATA_EN <= '1';
 				PC_inc <= '1';
+				nstate <= s_fetch;
+			else 
+				nstate <= s_load1;
+			end if;
+		
+		when s_print1 =>
+			mx1_sel <= '1';
+			DATA_EN <= '1';
+			if(OUT_BUSY = '1') then
+				nstate <= s_print1;
+			else
+				nstate <= s_print2;
+			end if;	
+		when s_print2 =>
+			OUT_DATA <= DATA_RDATA;
+			OUT_WE <= '1';
+			PC_inc <= '1';
+			nstate <= s_fetch;
+
+
+		-- Prepare to read data from PTR
+		when s_while1 =>
+			PC_inc <= '1';
+			mx1_sel <= '1';
+			DATA_EN <= '1';
+			nstate <= s_while2;
+
+		-- Read data from PTR
+		when s_while2 =>
+			mx1_sel <= '1';
+			-- If *PTR = 0, jump behind the loop
+			if(DATA_RDATA = 0) then
+				CNT_inc <= '1';
+				DATA_EN <= '1';
+				nstate <= s_while3;
+			-- if *PTR != 0, execute instructions inside the loop
+			else 
 				nstate <= s_fetch;	
-		when others => null;		
+			end if;
+				
+		-- Skip instructions until PC gets behind the loop end symbol ']'; count the loop start symbols '['
+		-- to take care of nested loops	
+		when s_while3 =>
+				if(CNT = 0) then
+					nstate <= s_fetch;
+				else
+					DATA_EN <= '1';
+					if(DATA_RDATA = X"5B") then
+						CNT_inc <= '1';
+					elsif (DATA_RDATA =X"5D") then
+						CNT_dec <= '1';
+					end if;	
+					PC_inc <= '1';
+					nstate <= s_while3;
+				end if;
+		
+		-- Prepare to read data from PTR	
+		when s_while_end1 =>
+				mx1_sel <= '1';
+				DATA_EN <= '1';
+				nstate <= s_while_end2;
+
+		-- Read from RDATA and decide wheter to continue to loop or break
+		when s_while_end2 =>
+				-- if *PTR = 0, break the loop (continue to the next instruction)
+				if(DATA_RDATA = 0) then
+					PC_inc <= '1';
+					nstate <= s_fetch;
+				-- else jump to the start of the loop	
+				else
+					CNT_inc <= '1';
+					PC_dec <= '1';
+					DATA_EN <= '1';
+					nstate <= s_while_end3;
+				end if;	
+
+				-- 1 clock space for PC to be updated
+		when s_while_end3 =>
+				DATA_EN <= '1';
+				nstate <= s_while_end4;
+				
+				-- Check if *PC is the start of the loop '[' ; count the loop end symbols '['
+				-- to take care of nested loops
+		when s_while_end4 =>
+				if(CNT = 0) then
+					nstate <= s_fetch;
+				else 
+					DATA_EN <= '1';
+					if(DATA_RDATA = X"5D" ) then 
+						CNT_inc <= '1';
+					elsif (DATA_RDATA = X"5B") then
+						CNT_dec <= '1';
+					end if;
+				end if;
+				nstate <= s_while_end5;
+				
+				-- If the opening bracket of the respective loop was found, continue with the next instruction
+				-- otherwise continue looking for it
+		when s_while_end5 =>
+				if(CNT = 0) then
+					PC_inc <= '1';
+					nstate <= s_fetch;
+				else 
+					DATA_EN <= '1';
+					PC_dec <= '1';
+					nstate <= s_while_end4;
+				end if;
+
+				-- Just skip the do-while opening bracket
+		when s_do_while =>
+				PC_inc <= '1';
+				nstate <= s_fetch;
+
+		-- Prepare to read data from PTR	
+		when s_do_while_end1 =>
+				mx1_sel <= '1';
+				DATA_EN <= '1';
+				nstate <= s_do_while_end2;
+
+		-- Read from RDATA and decide wheter to continue to loop or break
+		when s_do_while_end2 =>
+				-- if *PTR = 0, break the loop (continue to the next instruction)
+				if(DATA_RDATA = 0) then
+					PC_inc <= '1';
+					nstate <= s_fetch;
+				-- else jump to the start of the loop	
+				else
+					CNT_inc <= '1';
+					PC_dec <= '1';
+					DATA_EN <= '1';
+					nstate <= s_do_while_end3;
+				end if;	
+
+				-- 1 clock space for PC to be updated
+		when s_do_while_end3 =>
+				DATA_EN <= '1';
+				nstate <= s_do_while_end4;
+				
+				-- Check if *PC is the start of the loop '(' ; count the loop end symbols '('
+				-- to take care of nested loops
+		when s_do_while_end4 =>
+				if(CNT = 0) then
+					nstate <= s_fetch;
+				else 
+					DATA_EN <= '1';
+					if(DATA_RDATA = X"29" ) then 
+						CNT_inc <= '1';
+					elsif (DATA_RDATA = X"28") then
+						CNT_dec <= '1';
+					end if;
+				end if;
+				nstate <= s_do_while_end5;
+				
+				-- If the opening bracket of the respective loop was found, continue with the next instruction
+				-- otherwise continue looking for it
+		when s_do_while_end5 =>
+				if(CNT = 0) then
+					PC_inc <= '1';
+					nstate <= s_fetch;
+				else 
+					DATA_EN <= '1';
+					PC_dec <= '1';
+					nstate <= s_do_while_end4;
+				end if;
+				
+
+
+		when others => null;	
+				
 				
 	end case;		
 end process;
